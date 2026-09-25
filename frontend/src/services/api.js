@@ -1,5 +1,7 @@
-export const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-const API_BASE = `${API_URL.replace(/\/+$/, '')}/api`;
+const rawApiUrl = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000").trim().replace(/\/+$/, '');
+// Strip trailing /api if user or Netlify env variable provided it (prevents /api/api)
+export const API_URL = rawApiUrl.endsWith('/api') ? rawApiUrl.slice(0, -4) : rawApiUrl;
+const API_BASE = `${API_URL}/api`;
 
 const getHeaders = (extraHeaders = {}) => {
   const currentRole = localStorage.getItem('civiceye_role') || 'citizen';
@@ -17,9 +19,22 @@ const getHeaders = (extraHeaders = {}) => {
  * Universal API wrapper with granular status differentiation and network failure interception.
  */
 const fetchWithHandling = async (endpoint, options = {}) => {
-  const url = endpoint.startsWith('http') 
+  // Normalize endpoint to prevent double /api if caller passes '/api/...'
+  let cleanEndpoint = endpoint;
+  if (cleanEndpoint.startsWith('/api/')) {
+    cleanEndpoint = cleanEndpoint.slice(4);
+  } else if (cleanEndpoint.startsWith('api/')) {
+    cleanEndpoint = cleanEndpoint.slice(3);
+  } else if (cleanEndpoint === '/api' || cleanEndpoint === 'api') {
+    cleanEndpoint = '';
+  }
+
+  let url = endpoint.startsWith('http') 
     ? endpoint 
-    : `${API_BASE}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+    : `${API_BASE}${cleanEndpoint.startsWith('/') ? '' : '/'}${cleanEndpoint}`;
+
+  // Extra safety guarantee: deduplicate accidental /api/api in full URLs
+  url = url.replace(/([^:])\/api\/api(\/|$)/g, '$1/api$2');
 
   let res;
   try {

@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -51,6 +51,7 @@ app = FastAPI(
 
 # CORS configuration
 CORS_ORIGINS = [
+    "https://civiceye-ai.netlify.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
@@ -58,17 +59,33 @@ CORS_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
-custom_origin = os.environ.get("CORS_ORIGIN")
-if custom_origin and custom_origin not in CORS_ORIGINS:
-    CORS_ORIGINS.append(custom_origin)
+
+# Allow any custom origins specified via environment variables (single or comma-separated)
+custom_origin_env = os.environ.get("CORS_ORIGIN") or os.environ.get("CORS_ORIGINS")
+if custom_origin_env:
+    for origin in custom_origin_env.split(","):
+        cleaned = origin.strip().rstrip("/")
+        if cleaned and cleaned not in CORS_ORIGINS:
+            CORS_ORIGINS.append(cleaned)
+
+@app.middleware("http")
+async def normalize_duplicate_api_prefix(request: Request, call_next):
+    """Safeguard: ensures requests with duplicate /api/api/* are seamlessly normalized to /api/*."""
+    path = request.scope.get("path", "")
+    if path.startswith("/api/api/"):
+        request.scope["path"] = "/api/" + path[len("/api/api/"):]
+    elif path == "/api/api":
+        request.scope["path"] = "/api"
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://([a-zA-Z0-9_-]+\.)?netlify\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Mount static uploads
