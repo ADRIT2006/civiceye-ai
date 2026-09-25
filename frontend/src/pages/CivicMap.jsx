@@ -167,7 +167,7 @@ export const CivicMap = () => {
         </div>
       </div>
 
-      {/* Right Leaflet Full Map View (Light) */}
+      {/* Right Google Maps Full Map View */}
       <div className="flex-1 h-full relative">
         <CivicMapWidget issues={issues} height="100%" />
       </div>

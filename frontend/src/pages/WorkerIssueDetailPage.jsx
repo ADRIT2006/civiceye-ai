@@ -13,7 +13,8 @@ import {
   Sparkles,
   AlertTriangle,
   FileCheck2,
-  Lock
+  Lock,
+  Navigation
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -222,6 +223,17 @@ export const WorkerIssueDetailPage = () => {
             <Sparkles className="w-4 h-4" />
             <span>Ask Worker Copilot</span>
           </Link>
+
+          {issue.latitude && issue.longitude && (
+            <button
+              onClick={() => window.open(`https://www.google.com/maps/dir/?api=1&destination=${issue.latitude},${issue.longitude}`, '_blank', 'noopener,noreferrer')}
+              className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs rounded-xl border border-amber-200 shadow-xs transition active:scale-95 cursor-pointer"
+              title="Open Google Maps turn-by-turn directions"
+            >
+              <Navigation className="w-4 h-4 text-amber-600" />
+              <span>Navigate with Google Maps</span>
+            </button>
+          )}
         </div>
       </div>
 

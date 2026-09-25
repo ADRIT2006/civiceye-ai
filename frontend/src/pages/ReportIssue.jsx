@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { 
   Camera, 
@@ -14,70 +14,16 @@ import {
   Zap,
   Info,
   ArrowRight,
+  Radio,
   X
 } from 'lucide-react';
-import { TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
-import { CivicMapContainer } from '../components/CivicMapContainer';
-import L from 'leaflet';
+import { CivicLeafletMap } from '../components/CivicLeafletMap';
+import { LocationSearchBox } from '../components/LocationSearchBox';
+import { reverseGeocode } from '../services/osmGeocoding';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { DuplicateModal } from '../components/DuplicateModal';
 import { formatStatus } from '../utils/statusUtils';
-
-// Draggable map marker for light theme
-const customPin = L.divIcon({
-  html: `<div style="width: 28px; height: 28px; border-radius: 9999px; background: #2563eb; border: 3px solid #ffffff; box-shadow: 0 4px 10px rgba(0,0,0,0.25);"></div>`,
-  className: 'custom-pin',
-  iconSize: [28, 28],
-  iconAnchor: [14, 14]
-});
-
-const LocationPicker = ({ position, setPosition, address }) => {
-  const map = useMapEvents({
-    click(e) {
-      setPosition([e.latlng.lat, e.latlng.lng]);
-    }
-  });
-
-  useEffect(() => {
-    if (position && position[0] && position[1]) {
-      try {
-        map.flyTo(position, Math.max(map.getZoom(), 15), { animate: true });
-      } catch (err) {
-        // ignore map animation errors if container unmounted
-      }
-    }
-  }, [position, map]);
-
-  return position ? (
-    <Marker 
-      position={position} 
-      icon={customPin}
-      draggable={true}
-      eventHandlers={{
-        dragend: (e) => {
-          const marker = e.target;
-          const pos = marker.getLatLng();
-          setPosition([pos.lat, pos.lng]);
-        }
-      }}
-    >
-      <Popup className="civic-map-popup" autoPan={false}>
-        <div className="p-1 text-[#0f172a] font-sans">
-          <div className="text-[10px] uppercase font-extrabold tracking-wider text-[#0f172a] mb-0.5">
-            📍 Pinned Location (Draggable)
-          </div>
-          <div className="font-mono text-xs font-bold text-[#0f172a] bg-slate-100 border border-slate-300 px-2 py-1 rounded-md mb-1">
-            {position[0]?.toFixed(5)}° N, {position[1]?.toFixed(5)}° E
-          </div>
-          <div className="text-[11px] font-bold text-[#0f172a] truncate max-w-[200px]">
-            {address || 'Target Location Selected'}
-          </div>
-        </div>
-      </Popup>
-    </Marker>
-  ) : null;
-};
  
 export const ReportIssue = () => {
   const navigate = useNavigate();
@@ -90,6 +36,9 @@ export const ReportIssue = () => {
   const [address, setAddress] = useState('5th Cross Road, Indiranagar');
   const [ward, setWard] = useState('Ward boundary data unavailable');
   const [position, setPosition] = useState([12.9716, 77.5946]);
+  const [currentLocation, setCurrentLocation] = useState(null);
+  const [isTrackingLocation, setIsTrackingLocation] = useState(false);
+  const watchIdRef = useRef(null);
   
   const [imageFile, setImageFile] = useState(null);
   const [imageBase64, setImageBase64] = useState('');
@@ -199,24 +148,129 @@ export const ReportIssue = () => {
     reader.readAsDataURL(file);
   };
 
+  // Clean up watchPosition on unmount
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current !== null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+    };
+  }, []);
+
+  const handleToggleTrackLocation = () => {
+    if (!navigator.geolocation) {
+      showToast('Geolocation is not supported by your browser.', 'warning');
+      return;
+    }
+    if (isTrackingLocation) {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      setIsTrackingLocation(false);
+      showToast('Stopped live location tracking.', 'info');
+    } else {
+      setIsTrackingLocation(true);
+      showToast('Live device tracking active.', 'info');
+      try {
+        const id = navigator.geolocation.watchPosition(
+          (pos) => {
+            const lat = pos.coords.latitude;
+            const lon = pos.coords.longitude;
+            setCurrentLocation([lat, lon]);
+          },
+          (err) => {
+            console.warn('watchPosition error:', err);
+            setIsTrackingLocation(false);
+            showToast('Unable to track location.', 'warning');
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+        watchIdRef.current = id;
+      } catch (e) {
+        console.warn('Failed to start watchPosition:', e);
+        setIsTrackingLocation(false);
+      }
+    }
+  };
+
   const handleUseCurrentLocation = () => {
     if (navigator.geolocation) {
       showToast('Acquiring real location via browser Geolocation API...', 'info');
       navigator.geolocation.getCurrentPosition(
-        (pos) => {
+        async (pos) => {
           const lat = pos.coords.latitude;
           const lon = pos.coords.longitude;
           setPosition([lat, lon]);
+          setCurrentLocation([lat, lon]);
           showToast(`Acquired real coordinates: ${lat.toFixed(5)}° N, ${lon.toFixed(5)}° E`, 'success');
+          try {
+            const detectedAddress = await reverseGeocode(lat, lon);
+            if (detectedAddress) {
+              setAddress(detectedAddress);
+            } else {
+              setAddress('Address unavailable');
+            }
+          } catch (e) {
+            console.warn('Reverse geocode error:', e);
+            setAddress('Address unavailable');
+          }
+          try {
+            const res = await api.detectWard(lat, lon);
+            if (res && res.ward_name) {
+              setWard(res.ward_name);
+            }
+          } catch (err) {
+            console.warn('Auto ward detection failed:', err);
+          }
         },
         (err) => {
           console.warn('Geolocation error:', err);
-          showToast('Location permission denied. Please click on the map to set your location manually.', 'warning');
+          showToast('Unable to access your current location. You can select the location manually on the map.', 'warning');
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     } else {
       showToast('Geolocation is not supported by your browser.', 'warning');
+    }
+  };
+
+  const handlePositionChange = async ([lat, lng]) => {
+    setPosition([lat, lng]);
+    try {
+      const detectedAddress = await reverseGeocode(lat, lng);
+      if (detectedAddress) {
+        setAddress(detectedAddress);
+      } else {
+        setAddress('Address unavailable');
+      }
+    } catch (e) {
+      console.warn('Reverse geocode error:', e);
+      setAddress('Address unavailable');
+    }
+    try {
+      const res = await api.detectWard(lat, lng);
+      if (res && res.ward_name) {
+        setWard(res.ward_name);
+      }
+    } catch (err) {
+      console.warn('Ward detection error:', err);
+    }
+  };
+
+  const handleSelectLocation = async ({ lat, lon, displayName, address: addr }) => {
+    setPosition([lat, lon]);
+    const finalAddr = displayName || addr;
+    if (finalAddr) {
+      setAddress(finalAddr);
+    }
+    try {
+      const res = await api.detectWard(lat, lon);
+      if (res && res.ward_name) {
+        setWard(res.ward_name);
+      }
+    } catch (err) {
+      console.warn('Ward detection error:', err);
     }
   };
 
@@ -610,36 +664,65 @@ export const ReportIssue = () => {
 
         {/* Geolocation & Interactive Map */}
         <div>
-          <div className="flex items-center justify-between mb-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
             <label className="text-xs font-bold uppercase tracking-wider text-slate-700">
               3. Geolocation Pinpoint
             </label>
-            <button
-              type="button"
-              onClick={handleUseCurrentLocation}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm transition"
-              title="Use browser Geolocation API to acquire real GPS coordinates"
-            >
-              <Crosshair className="w-3.5 h-3.5" />
-              <span>USE MY CURRENT LOCATION</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleToggleTrackLocation}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold text-xs border transition cursor-pointer ${
+                  isTrackingLocation
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 shadow-xs'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+                title="Track device position as GPS changes"
+              >
+                <Radio className={`w-3.5 h-3.5 ${isTrackingLocation ? 'animate-pulse text-emerald-600' : 'text-slate-500'}`} />
+                <span>{isTrackingLocation ? 'Tracking Location' : 'Track My Location'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleUseCurrentLocation}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm transition cursor-pointer"
+                title="Use browser Geolocation API to acquire real GPS coordinates"
+              >
+                <Crosshair className="w-3.5 h-3.5" />
+                <span>USE MY CURRENT LOCATION</span>
+              </button>
+            </div>
           </div>
 
-          <CivicMapContainer
+          {/* Location Search Box (Nominatim OpenStreetMap search) */}
+          <LocationSearchBox
+            onSelectLocation={handleSelectLocation}
+            placeholder="Search location (e.g. Kalyani Railway Station, JIS College, Kolkata)..."
+          />
+
+          {/* Interactive Leaflet Map with Draggable Pin */}
+          <CivicLeafletMap
             center={position}
             zoom={15}
-            scrollWheelZoom={false}
-            height="288px"
-            className="border border-slate-300 shadow-sm mb-3"
+            height="320px"
+            className="border border-slate-300 rounded-2xl shadow-sm mb-3 overflow-hidden"
+            draggableMarker={{
+              position,
+              onPositionChange: handlePositionChange,
+              address,
+            }}
+            currentLocation={currentLocation}
+            onMapClick={handlePositionChange}
+            showLayerSwitcher={true}
             overlay={
-              /* Pinned Coordinates & Address Badge on Map Click (Deep High-Contrast Slate #0f172a) */
-              <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[500] bg-white/95 backdrop-blur-md border border-slate-300 rounded-xl px-3.5 py-2 shadow-lg flex items-center justify-between gap-2">
+              /* Pinned Coordinates & Address Badge on Map Click */
+              <div className="absolute bottom-2.5 left-2.5 right-2.5 z-[400] bg-white/95 backdrop-blur-md border border-slate-300 rounded-xl px-3.5 py-2 shadow-lg flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="w-2.5 h-2.5 rounded-full bg-blue-600 ring-2 ring-blue-200 flex-shrink-0" />
                   <div className="min-w-0">
                     <div className="text-xs font-extrabold text-[#0f172a] truncate flex items-center gap-1">
-                      <span className="text-[#0f172a]">📍</span>
-                      <span className="text-[#0f172a]">{address || 'Location Pinned'}</span>
+                      <span>📍</span>
+                      <span>{address || 'Location Pinned'}</span>
                     </div>
                     <div className="text-[11px] font-mono font-bold text-[#0f172a] tracking-tight">
                       GPS Coordinates: {position[0]?.toFixed(5)}° N, {position[1]?.toFixed(5)}° E
@@ -651,13 +734,7 @@ export const ReportIssue = () => {
                 </span>
               </div>
             }
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            <LocationPicker position={position} setPosition={setPosition} address={address} />
-          </CivicMapContainer>
+          />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>

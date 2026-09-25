@@ -16,21 +16,9 @@ import {
   ShieldAlert,
   Compass
 } from 'lucide-react';
-import { TileLayer, Polygon, Popup, useMap } from 'react-leaflet';
-import { CivicMapContainer } from '../components/CivicMapContainer';
+import { CivicLeafletMap } from '../components/CivicLeafletMap';
 import { api } from '../services/api';
 import { useLanguage } from '../context/LanguageContext';
-
-// Helper component to center map on selected ward
-const WardMapFocus = ({ center, zoom }) => {
-  const map = useMap();
-  useEffect(() => {
-    if (center) {
-      map.flyTo(center, zoom || 13, { duration: 1.2 });
-    }
-  }, [center, zoom, map]);
-  return null;
-};
 
 export const AdminWardMapPage = () => {
   const { t } = useLanguage();
@@ -38,6 +26,7 @@ export const AdminWardMapPage = () => {
   const [geojson, setGeojson] = useState(null);
   const [wardList, setWardList] = useState([]);
   const [workloadList, setWorkloadList] = useState([]);
+  const [issues, setIssues] = useState([]);
   const [selectedWard, setSelectedWard] = useState(null);
   const [filterZone, setFilterZone] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -51,9 +40,10 @@ export const AdminWardMapPage = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [statsRes, workloadRes] = await Promise.all([
+      const [statsRes, workloadRes, issuesRes] = await Promise.all([
         api.getWardMapStats(),
-        api.getWardWorkload()
+        api.getWardWorkload(),
+        api.getAdminIssues().catch(() => [])
       ]);
 
       if (statsRes && statsRes.geojson) {
@@ -65,6 +55,9 @@ export const AdminWardMapPage = () => {
       }
       if (workloadRes) {
         setWorkloadList(workloadRes);
+      }
+      if (issuesRes) {
+        setIssues(Array.isArray(issuesRes) ? issuesRes : []);
       }
     } catch (err) {
       console.error('Failed to load ward map data:', err);
@@ -288,84 +281,30 @@ export const AdminWardMapPage = () => {
           </div>
         </div>
 
-        {/* Center/Right: Interactive Leaflet GeoJSON Map */}
+        {/* Center/Right: Interactive Leaflet GeoJSON & Issues Map */}
         <div className="flex-1 relative flex flex-col bg-slate-100 min-h-0">
-          <CivicMapContainer
+          <CivicLeafletMap
             center={mapCenter}
             zoom={mapZoom}
-            scrollWheelZoom={true}
             height="100%"
             className="w-full h-full rounded-none border-0 shadow-none z-0"
+            issues={issues}
+            geojson={geojson}
+            showWards={true}
+            selectedWard={selectedWard}
+            onSelectWard={(ward) => handleSelectWard(ward)}
+            wardCount={wardList.length}
+            role="admin"
+            showLayerSwitcher={true}
             overlay={
               (!geojson?.features || geojson.features.length === 0) ? (
-                <div className="absolute top-4 left-14 z-[400] bg-white/95 backdrop-blur-md border border-amber-300 rounded-xl px-3.5 py-2 shadow-md text-xs font-bold text-amber-800 flex items-center gap-2">
+                <div className="absolute top-4 left-4 z-10 bg-white/95 backdrop-blur-md border border-amber-300 rounded-xl px-3.5 py-2 shadow-md text-xs font-bold text-amber-800 flex items-center gap-2">
                   <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
                   <span>Ward boundary data unavailable</span>
                 </div>
               ) : null
             }
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            <WardMapFocus center={mapCenter} zoom={mapZoom} />
-
-            {/* Render GeoJSON Polygons */}
-            {geojson &&
-              geojson.features &&
-              geojson.features.map((feature) => {
-                const props = feature.properties;
-                // Coordinates in geojson are [lng, lat], leaflet needs [lat, lng]
-                const leafletPositions = feature.geometry.coordinates[0].map((coord) => [coord[1], coord[0]]);
-                const isSelected = selectedWard && (selectedWard.ward_id === props.id || selectedWard.id === props.id);
-
-                return (
-                  <Polygon
-                    key={props.id}
-                    positions={leafletPositions}
-                    pathOptions={{
-                      color: isSelected ? '#1d4ed8' : props.color || '#3b82f6',
-                      fillColor: props.color || '#3b82f6',
-                      fillOpacity: isSelected ? 0.45 : 0.22,
-                      weight: isSelected ? 3.5 : 1.8,
-                      dashArray: isSelected ? '4, 4' : undefined
-                    }}
-                    eventHandlers={{
-                      click: () => {
-                        handleSelectWard(props);
-                      }
-                    }}
-                  >
-                    <Popup>
-                      <div className="p-2 min-w-[200px] text-slate-900">
-                        <div className="flex items-center justify-between border-b pb-1.5 mb-2">
-                          <strong className="text-xs font-extrabold text-blue-700">{props.name}</strong>
-                          <span className="text-[10px] font-mono bg-blue-50 text-blue-800 px-1 rounded">
-                            {props.id}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-600 mb-1">
-                          Zone: <strong>{props.zone}</strong>
-                        </p>
-                        <div className="grid grid-cols-2 gap-1 text-[11px] my-1 bg-slate-50 p-1.5 rounded">
-                          <div>Open: <strong className="text-amber-700">{props.open_issues ?? 0}</strong></div>
-                          <div>Assigned: <strong className="text-slate-800">{props.workers_assigned ?? 0}</strong></div>
-                          <div>Resolved: <strong className="text-emerald-700">{props.resolved ?? 0}</strong></div>
-                          <div>Critical: <strong className="text-red-700">{props.critical_issues ?? 0}</strong></div>
-                        </div>
-                        <button
-                          onClick={() => handleSelectWard(props)}
-                          className="mt-2 w-full py-1 bg-blue-600 text-white rounded text-[11px] font-bold hover:bg-blue-700 transition"
-                        >
-                          View Ward Dashboard
-                        </button>
-                      </div>
-                    </Popup>
-                  </Polygon>
-                );
-              })}
-          </CivicMapContainer>
+          />
 
           {/* Floating Ward Quick Inspection Card (Bottom Overlay) */}
           {selectedWard && (

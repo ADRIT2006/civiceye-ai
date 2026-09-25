@@ -17,49 +17,12 @@ import {
   Layers,
   HelpCircle
 } from 'lucide-react';
-import { TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
-import { CivicMapContainer } from '../components/CivicMapContainer';
-import L from 'leaflet';
+import { CivicLeafletMap } from '../components/CivicLeafletMap';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../context/LanguageContext';
 import { StatusBadge } from '../components/StatusBadge';
 import { PriorityBadge } from '../components/PriorityBadge';
-
-// Custom Map Pin for Citizen Map
-const customCitizenPin = L.divIcon({
-  html: `<div style="width: 32px; height: 32px; border-radius: 9999px; background: #2563eb; border: 3px solid #ffffff; box-shadow: 0 4px 14px rgba(37,99,235,0.4); display: flex; items-center; justify-content: center; color: white; font-weight: bold; font-size: 14px;">📍</div>`,
-  className: 'custom-citizen-pin',
-  iconSize: [32, 32],
-  iconAnchor: [16, 16]
-});
-
-const CitizenPinDrop = ({ position, setPosition, setDetectedWard }) => {
-  useMapEvents({
-    click(e) {
-      const newPos = [e.latlng.lat, e.latlng.lng];
-      setPosition(newPos);
-      api.detectWard(newPos[0], newPos[1])
-        .then((res) => {
-          if (res?.ward_name) setDetectedWard(res.ward_name);
-        })
-        .catch(() => {});
-    }
-  });
-
-  return position ? (
-    <Marker position={position} icon={customCitizenPin}>
-      <Popup autoPan={false}>
-        <div className="p-1 text-slate-900 font-sans text-xs">
-          <div className="font-extrabold text-blue-700">📍 Chosen Issue Location</div>
-          <div className="text-[11px] font-mono mt-0.5">
-            {position[0]?.toFixed(4)}° N, {position[1]?.toFixed(4)}° E
-          </div>
-        </div>
-      </Popup>
-    </Marker>
-  ) : null;
-};
 
 export const CitizenDashboard = () => {
   const navigate = useNavigate();
@@ -258,15 +221,34 @@ export const CitizenDashboard = () => {
           </div>
 
           {/* Interactive Pin-Drop Leaflet Map */}
-          <CivicMapContainer
+          <CivicLeafletMap
             center={pinPosition}
             zoom={15}
-            scrollWheelZoom={false}
             height="300px"
-            className="border border-slate-200 shadow-inner"
+            className="border border-slate-200 shadow-inner rounded-2xl overflow-hidden"
+            draggableMarker={{
+              position: pinPosition,
+              onPositionChange: ([lat, lng]) => {
+                setPinPosition([lat, lng]);
+                api.detectWard(lat, lng)
+                  .then((res) => {
+                    if (res?.ward_name) setDetectedWard(res.ward_name);
+                  })
+                  .catch(() => {});
+              },
+            }}
+            onMapClick={([lat, lng]) => {
+              setPinPosition([lat, lng]);
+              api.detectWard(lat, lng)
+                .then((res) => {
+                  if (res?.ward_name) setDetectedWard(res.ward_name);
+                })
+                .catch(() => {});
+            }}
+            showLayerSwitcher={true}
             overlay={
               /* Bottom Floating Detected Ward Bar */
-              <div className="absolute bottom-3 left-3 right-3 z-[400] bg-white/95 backdrop-blur-md rounded-xl p-3 border border-slate-200 shadow-lg flex items-center justify-between gap-3">
+              <div className="absolute bottom-3 left-3 right-3 z-10 bg-white/95 backdrop-blur-md rounded-xl p-3 border border-slate-200 shadow-lg flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-[10px] font-bold text-slate-400 uppercase">Detected Ward Location:</div>
                   <div className="text-xs font-extrabold truncate flex items-center gap-1.5">
@@ -277,23 +259,13 @@ export const CitizenDashboard = () => {
 
                 <button
                   onClick={() => navigate('/report', { state: { position: pinPosition, ward: detectedWard } })}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow transition shrink-0"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs rounded-xl shadow transition shrink-0 cursor-pointer"
                 >
                   Report at this Pin
                 </button>
               </div>
             }
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            <CitizenPinDrop
-              position={pinPosition}
-              setPosition={setPinPosition}
-              setDetectedWard={setDetectedWard}
-            />
-          </CivicMapContainer>
+          />
         </div>
 
         {/* Right 5 Cols: CivicEye Copilot Assistant Card */}
